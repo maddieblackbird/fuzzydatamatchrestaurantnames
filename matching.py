@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Restaurant Contact Matcher Script
+Restaurant Contact Matcher Script with Claude Verification
 Matches restaurant locations with contact information using both exact Google Places ID 
-matching and fuzzy name matching. Errs on the side of including more contacts rather than missing any.
+matching and fuzzy name matching, then verifies matches using Claude Sonnet 4.
 """
 
 import pandas as pd
@@ -10,7 +10,17 @@ import numpy as np
 import re
 from difflib import SequenceMatcher
 import warnings
+import json
+from anthropic import Anthropic
+import time
+from typing import List, Dict, Tuple
+
 warnings.filterwarnings('ignore')
+
+# Configuration constants
+INCLUSIVE_THRESHOLD = 0.35  # Threshold for fuzzy matching - lower values are more inclusive
+BATCH_SIZE = 20  # Number of pairings to send to Claude at once
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"  # Claude Sonnet 4 model
 
 def normalize_restaurant_name(name):
     """
@@ -248,12 +258,166 @@ def match_restaurants_to_contacts(restaurants_df, contacts_df, threshold=0.35):
     
     return pd.DataFrame(results)
 
+def verify_matches_with_claude(results_df: pd.DataFrame, api_key: str) -> pd.DataFrame:
+    """
+    Use Claude Sonnet 4 to verify that matched restaurant-contact pairs 
+    actually refer to the same establishment.
+    """
+    print("\n" + "=" * 60)
+    print("CLAUDE VERIFICATION STEP")
+    print("=" * 60)
+    
+    # Initialize Anthropic client
+    client = Anthropic(api_key=api_key)
+    
+    # Get only matched rows (skip "No Matches Found")
+    matched_df = results_df[results_df['Match Status'] == 'Matched'].copy()
+    
+    if matched_df.empty:
+        print("No matches to verify.")
+        return results_df
+    
+    # Skip verification for exact Google Place ID matches (these are definitionally correct)
+    exact_matches = matched_df[matched_df['Match Type'] == 'Exact Google Place ID']
+    fuzzy_matches = matched_df[matched_df['Match Type'] != 'Exact Google Place ID']
+    
+    print(f"Skipping verification for {len(exact_matches)} exact Google Place ID matches")
+    print(f"Verifying {len(fuzzy_matches)} fuzzy matches")
+    
+    if fuzzy_matches.empty:
+        print("No fuzzy matches to verify.")
+        return results_df
+    
+    # Get unique pairings to verify
+    unique_pairings = fuzzy_matches[['Restaurant', 'City', 'Contact Deal Name', 'Contact Company']].drop_duplicates()
+    
+    # Filter out rows where Contact Deal Name is empty
+    unique_pairings = unique_pairings[unique_pairings['Contact Deal Name'].notna() & (unique_pairings['Contact Deal Name'] != '')]
+    
+    print(f"Found {len(unique_pairings)} unique restaurant-contact pairings to verify")
+    
+    # Process in batches
+    verified_pairings = {}
+    
+    for i in range(0, len(unique_pairings), BATCH_SIZE):
+        batch = unique_pairings.iloc[i:i+BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        total_batches = (len(unique_pairings) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        print(f"\nProcessing batch {batch_num}/{total_batches}...")
+        
+        # Prepare batch for Claude
+        batch_items = []
+        for _, row in batch.iterrows():
+            item = {
+                "restaurant_name": row['Restaurant'],
+                "restaurant_city": row['City'] if pd.notna(row['City']) else "Unknown",
+                "contact_deal_name": row['Contact Deal Name'],
+                "contact_company": row['Contact Company'] if pd.notna(row['Contact Company']) else ""
+            }
+            batch_items.append(item)
+        
+        # Create prompt for Claude
+        prompt = f"""You are a restaurant verification expert. I need you to determine if the following restaurant names and contact deal names actually refer to the SAME physical establishment or business.
+
+For each pairing, consider:
+1. Are these clearly the same business (even if names differ slightly)?
+2. Could one be a parent company/franchise and the other a specific location?
+3. Are there any indicators these might be DIFFERENT businesses (e.g., completely different cuisine types, one is clearly a chain and the other isn't)?
+4. Consider the city location if provided
+
+Please respond with a JSON array where each item has:
+- "index": the index number (0-based)
+- "same_place": true/false (true if they refer to the same establishment)
+- "confidence": "high", "medium", or "low"
+- "reason": brief explanation (max 50 words)
+
+Here are the pairings to verify:
+
+{json.dumps(batch_items, indent=2)}
+
+Return ONLY the JSON array, no other text."""
+
+        try:
+            # Call Claude API
+            response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=4000,
+                temperature=0,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Parse Claude's response
+            response_text = response.content[0].text.strip()
+            
+            # Try to extract JSON if it's wrapped in markdown
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            verification_results = json.loads(response_text)
+            
+            # Store results
+            for j, result in enumerate(verification_results):
+                if j < len(batch):
+                    row = batch.iloc[j]
+                    key = (row['Restaurant'], row['Contact Deal Name'])
+                    verified_pairings[key] = result['same_place']
+                    
+                    if not result['same_place']:
+                        print(f"  ❌ Rejected: {row['Restaurant']} ≠ {row['Contact Deal Name']}")
+                        print(f"     Reason: {result['reason']}")
+            
+            # Rate limiting
+            time.sleep(0.5)  # Be respectful of API limits
+            
+        except Exception as e:
+            print(f"  ⚠️ Error processing batch {batch_num}: {e}")
+            # On error, be conservative and keep the matches
+            for _, row in batch.iterrows():
+                key = (row['Restaurant'], row['Contact Deal Name'])
+                verified_pairings[key] = True
+    
+    # Apply verification results
+    print("\n" + "-" * 60)
+    print("Applying verification results...")
+    
+    rows_to_keep = []
+    removed_count = 0
+    
+    for _, row in results_df.iterrows():
+        # Always keep non-matched rows and exact Google Place ID matches
+        if row['Match Status'] != 'Matched' or row['Match Type'] == 'Exact Google Place ID':
+            rows_to_keep.append(True)
+        else:
+            # Check if this pairing was verified
+            key = (row['Restaurant'], row['Contact Deal Name'])
+            if key in verified_pairings:
+                keep = verified_pairings[key]
+                rows_to_keep.append(keep)
+                if not keep:
+                    removed_count += 1
+            else:
+                # If not in verification (e.g., empty deal name), keep it
+                rows_to_keep.append(True)
+    
+    # Filter the dataframe
+    verified_df = results_df[rows_to_keep].copy()
+    
+    print(f"Removed {removed_count} rows that failed verification")
+    print(f"Final dataset contains {len(verified_df)} rows")
+    
+    return verified_df
+
 def main():
     """
-    Main function to run the restaurant contact matching process.
+    Main function to run the restaurant contact matching process with Claude verification.
     """
     print("=" * 60)
-    print("Restaurant Contact Matcher")
+    print("Restaurant Contact Matcher with Claude Verification")
     print("=" * 60)
     
     # File paths - update these to match your file locations
@@ -263,13 +427,22 @@ def main():
     
     # You can also use command line arguments if preferred
     import sys
-    if len(sys.argv) == 3:
+    import os
+    
+    if len(sys.argv) >= 3:
         RESTAURANTS_FILE = sys.argv[1]
         CONTACTS_FILE = sys.argv[2]
-    elif len(sys.argv) == 4:
-        RESTAURANTS_FILE = sys.argv[1]
-        CONTACTS_FILE = sys.argv[2]
+    if len(sys.argv) >= 4:
         OUTPUT_FILE = sys.argv[3]
+    
+    # Get API key from environment variable or prompt
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        print("\n⚠️  ANTHROPIC_API_KEY not found in environment variables.")
+        api_key = input("Please enter your Anthropic API key: ").strip()
+        if not api_key:
+            print("❌ API key is required for Claude verification. Exiting.")
+            return
     
     try:
         # Load the data
@@ -283,58 +456,76 @@ def main():
         
         # Perform matching
         print("\n" + "=" * 60)
-        print("Starting matching process...")
+        print("STEP 1: Initial Matching Process")
         print("=" * 60)
         
         results_df = match_restaurants_to_contacts(
             restaurants_df, 
             contacts_df,
-            threshold=INCLUSIVE_THRESHOLD  # Using the defined threshold variable
+            threshold=INCLUSIVE_THRESHOLD
         )
         
-        # Save results
-        print(f"\nSaving results to: {OUTPUT_FILE}")
-        results_df.to_csv(OUTPUT_FILE, index=False)
+        # Save pre-verification results
+        pre_verify_file = OUTPUT_FILE.replace('.csv', '_pre_verification.csv')
+        results_df.to_csv(pre_verify_file, index=False)
+        print(f"\nPre-verification results saved to: {pre_verify_file}")
+        
+        # Verify matches with Claude
+        print("\n" + "=" * 60)
+        print("STEP 2: Claude Verification")
+        print("=" * 60)
+        
+        verified_df = verify_matches_with_claude(results_df, api_key)
+        
+        # Save final results
+        print(f"\nSaving verified results to: {OUTPUT_FILE}")
+        verified_df.to_csv(OUTPUT_FILE, index=False)
         
         # Print summary statistics
         print("\n" + "=" * 60)
-        print("MATCHING COMPLETE - SUMMARY")
+        print("MATCHING COMPLETE - FINAL SUMMARY")
         print("=" * 60)
         
         total_restaurants = len(restaurants_df)
-        matched_restaurants = results_df[results_df['Match Status'] == 'Matched']['Restaurant'].nunique()
-        no_match_restaurants = results_df[results_df['Match Status'] == 'No Matches Found']['Restaurant'].nunique()
-        total_matches = len(results_df[results_df['Match Status'] == 'Matched'])
+        matched_restaurants = verified_df[verified_df['Match Status'] == 'Matched']['Restaurant'].nunique()
+        no_match_restaurants = verified_df[verified_df['Match Status'] == 'No Matches Found']['Restaurant'].nunique()
+        total_matches = len(verified_df[verified_df['Match Status'] == 'Matched'])
         
         print(f"Total restaurants processed: {total_restaurants}")
-        print(f"Restaurants with matches: {matched_restaurants} ({matched_restaurants/total_restaurants*100:.1f}%)")
+        print(f"Restaurants with verified matches: {matched_restaurants} ({matched_restaurants/total_restaurants*100:.1f}%)")
         print(f"Restaurants with no matches: {no_match_restaurants}")
-        print(f"Total matched contacts: {total_matches}")
+        print(f"Total verified matched contacts: {total_matches}")
         print(f"Average contacts per restaurant: {total_matches/total_restaurants:.1f}")
         
         # Show match type distribution
-        print("\nMatch Type Distribution:")
-        match_types = results_df[results_df['Match Status'] == 'Matched']['Match Type'].value_counts()
+        print("\nVerified Match Type Distribution:")
+        match_types = verified_df[verified_df['Match Status'] == 'Matched']['Match Type'].value_counts()
         for match_type, count in match_types.items():
             print(f"  {match_type}: {count}")
         
         # Show score distribution for fuzzy matches
-        fuzzy_matches = results_df[results_df['Match Type'].str.contains('Fuzzy', na=False)]
+        fuzzy_matches = verified_df[verified_df['Match Type'].str.contains('Fuzzy', na=False)]
         if not fuzzy_matches.empty:
             fuzzy_matches['Score'] = fuzzy_matches['Match Score'].astype(float)
-            print("\nFuzzy Match Score Distribution:")
+            print("\nVerified Fuzzy Match Score Distribution:")
             print(f"  Minimum: {fuzzy_matches['Score'].min():.3f}")
             print(f"  Maximum: {fuzzy_matches['Score'].max():.3f}")
             print(f"  Mean: {fuzzy_matches['Score'].mean():.3f}")
             print(f"  Median: {fuzzy_matches['Score'].median():.3f}")
         
-        print(f"\n✅ Results saved to: {OUTPUT_FILE}")
-        print(f"Total output rows: {len(results_df)}")
+        print(f"\n✅ Verified results saved to: {OUTPUT_FILE}")
+        print(f"Total output rows: {len(verified_df)}")
+        
+        # Compare pre and post verification
+        print("\n📊 Verification Impact:")
+        print(f"  Rows before verification: {len(results_df)}")
+        print(f"  Rows after verification: {len(verified_df)}")
+        print(f"  Rows removed: {len(results_df) - len(verified_df)}")
         
         # Optional: Save high-confidence matches separately
-        high_confidence = results_df[
-            (results_df['Match Type'] == 'Exact Google Place ID') | 
-            (results_df['Match Score'].astype(float) >= 0.6)
+        high_confidence = verified_df[
+            (verified_df['Match Type'] == 'Exact Google Place ID') | 
+            (verified_df['Match Score'].astype(str) != '0') & (verified_df['Match Score'].astype(float) >= 0.6)
         ]
         
         if not high_confidence.empty:
