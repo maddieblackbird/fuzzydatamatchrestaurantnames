@@ -289,7 +289,7 @@ def main():
         results_df = match_restaurants_to_contacts(
             restaurants_df, 
             contacts_df,
-            threshold=0.35  # Low threshold to be inclusive
+            threshold=INCLUSIVE_THRESHOLD  # Using the defined threshold variable
         )
         
         # Save results
