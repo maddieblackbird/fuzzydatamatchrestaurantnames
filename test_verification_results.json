@@ -1,0 +1,134 @@
+{
+  "test_pairings": [
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Doubles Amagansett- New Deal",
+      "contact_company": "Doubles"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "6 Tables Marina",
+      "contact_company": "6 Tables"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Due West West Village",
+      "contact_company": "Due West"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "ALL BLUES",
+      "contact_company": "ALL BLUES"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Deux Luxe",
+      "contact_company": "Deux Luxe"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Kubeh Greenwich Village",
+      "contact_company": "Kubeh"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Roberta's Bushwick",
+      "contact_company": "Roberta's"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Steuben\u2019s (DEN)",
+      "contact_company": "Steuben\u2019s"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Berkeley\u2019s Hampton Park Terrace",
+      "contact_company": "Berkeley's"
+    },
+    {
+      "restaurant_name": "Doubles",
+      "restaurant_city": "Amagansett",
+      "contact_deal_name": "Chouquet's",
+      "contact_company": "Chouquet's"
+    }
+  ],
+  "verification_results": [
+    {
+      "index": 0,
+      "same_place": true,
+      "confidence": "high",
+      "reason": "Exact match on business name 'Doubles' and location 'Amagansett'"
+    },
+    {
+      "index": 1,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Completely different business names - '6 Tables Marina' vs 'Doubles'"
+    },
+    {
+      "index": 2,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names and locations - 'Due West' in West Village vs 'Doubles' in Amagansett"
+    },
+    {
+      "index": 3,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names - 'ALL BLUES' vs 'Doubles'"
+    },
+    {
+      "index": 4,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names - 'Deux Luxe' vs 'Doubles'"
+    },
+    {
+      "index": 5,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names and locations - 'Kubeh' in Greenwich Village vs 'Doubles' in Amagansett"
+    },
+    {
+      "index": 6,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names and locations - 'Roberta's' in Bushwick vs 'Doubles' in Amagansett"
+    },
+    {
+      "index": 7,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names and locations - 'Steuben's' in Denver vs 'Doubles' in Amagansett"
+    },
+    {
+      "index": 8,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names - 'Berkeley's Hampton Park Terrace' vs 'Doubles'"
+    },
+    {
+      "index": 9,
+      "same_place": false,
+      "confidence": "high",
+      "reason": "Different business names - 'Chouquet's' vs 'Doubles'"
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "same_place": 1,
+    "different": 9,
+    "confidence_distribution": {
+      "high": 10
+    }
+  }
+}
